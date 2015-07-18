@@ -107,6 +107,8 @@ prompt_pure_preprompt_render() {
 	# execution time
 	preprompt+="%F{yellow}${prompt_pure_cmd_exec_time}%f"
 
+	preprompt+="${prompt_pure_tick}${prompt_pure_cursor_zle_data}${prompt_pure_accept_line_zle_data}"
+
 	# if executing through precmd, do not perform fancy terminal editing
 	if [[ "$1" == "precmd" ]]; then
 		print -P "\n${preprompt}"
@@ -114,13 +116,16 @@ prompt_pure_preprompt_render() {
 		# only redraw if preprompt has changed
 		[[ "${prompt_pure_last_preprompt}" != "${preprompt}" ]] || return
 
-		# calculate length of preprompt for redraw purposes
-		local preprompt_length=$(prompt_pure_string_length $preprompt)
-		local lines=$(( ($preprompt_length - 1) / $COLUMNS + 1 ))
+		zle && zle prompt_pure_buffer_cursor_position
+
+		# calculate length of preprompt for redraw purposes, taking into account the current zle buffer
+		integer preprompt_length lines
+		preprompt_length=$(prompt_pure_string_length $preprompt)
+		(( lines = (preprompt_length - 1) / COLUMNS + prompt_pure_cursor_offset_lines ))
 
 		# disable clearing of line if last char of preprompt is last column of terminal
 		local clr="\e[K"
-		(( $COLUMNS * $lines == $preprompt_length )) && clr=""
+		(( COLUMNS * lines == preprompt_length )) && clr=""
 
 		# modify previous preprompt
 		print -Pn "\e7\e[${lines}A\e[1G${preprompt}${clr}\e8"
@@ -185,6 +190,54 @@ prompt_pure_async_git_fetch() {
 	GIT_TERMINAL_PROMPT=0 command git -c gc.auto=0 fetch
 }
 
+prompt_pure_async_ticker() {
+	sleep 1
+	print 1
+}
+
+prompt_pure_line_init() {
+	# if we do not evaluate PROMPT and PROMPT2 in place, their execution context
+	# will change and the result might be wrong
+	local ps1_length=${#${(S%%)PROMPT//(\%([KF1]|)\{*\}|\%[Bbkf])}}
+	local ps2_length=${#${(S%%)PROMPT2//(\%([KF1]|)\{*\}|\%[Bbkf])}}
+	case $CONTEXT in
+		start)
+			prompt_pure_accumulated_prebuffer_lines=0
+			prompt_pure_ps_length=$ps1_length
+			;;
+		cont) prompt_pure_ps_length=$ps2_length;;
+	esac
+
+	prompt_pure_accept_line_zle_data=" acc_lines:${prompt_pure_accumulated_prebuffer_lines} ps_len:${prompt_pure_ps_length}"
+}
+
+prompt_pure_line_finish() {
+	prompt_pure_accumulated_prebuffer_lines+=$(( prompt_pure_ps_length / COLUMNS + BUFFERLINES ))
+}
+
+prompt_pure_buffer_cursor_position() {
+	integer lines columns prompt_length=$prompt_pure_ps_length
+
+	case $CONTEXT in
+		start) ;;
+		cont) lines=$prompt_pure_accumulated_prebuffer_lines;;
+		*) return;;
+	esac
+
+	# LBUFFER contains only the characters left of the cursor
+	for line in "${(@f)LBUFFER}"; do
+		# because tabs are calculated incorrectly, replace with them 8 spaces
+		columns=${#${line//$'\t'/        }}
+		(( lines += (columns + prompt_length) / COLUMNS + 1 ))
+		prompt_length=0 # reset as it does not affect subsequent lines
+	done
+
+	prompt_pure_cursor_offset_lines=$lines
+
+	# debug
+	prompt_pure_cursor_zle_data=" line:$lines col:$columns buf:$BUFFERLINES cur:$CURSOR"
+}
+
 prompt_pure_async_tasks() {
 	# initialize async worker
 	((!${prompt_pure_async_init:-0})) && {
@@ -226,6 +279,9 @@ prompt_pure_async_tasks() {
 		# check check if there is anything to pull
 		async_job "prompt_pure" prompt_pure_async_git_dirty "${PURE_GIT_UNTRACKED_DIRTY:-1}" "$working_tree"
 	fi
+
+	prompt_pure_tick=" 0"
+	async_job "prompt_pure" prompt_pure_async_ticker
 }
 
 prompt_pure_async_callback() {
@@ -247,6 +303,11 @@ prompt_pure_async_callback() {
 			prompt_pure_git_arrows=$(prompt_pure_check_git_arrows)
 			prompt_pure_preprompt_render
 			;;
+		prompt_pure_async_ticker)
+			prompt_pure_tick=" $(( prompt_pure_tick + output ))"
+			prompt_pure_preprompt_render
+			async_job "prompt_pure" prompt_pure_async_ticker
+			;;
 	esac
 }
 
@@ -263,6 +324,13 @@ prompt_pure_setup() {
 	autoload -Uz vcs_info
 	autoload -Uz async && async
 
+	typeset -g prompt_pure_ps_length
+	integer -g prompt_pure_accumulated_prebuffer_lines
+
+	typeset -g prompt_pure_cursor_offset_lines
+	typeset -g prompt_pure_cursor_zle_data
+	typeset -g prompt_pure_accept_line_zle_data
+
 	add-zsh-hook precmd prompt_pure_precmd
 	add-zsh-hook preexec prompt_pure_preexec
 
@@ -277,6 +345,10 @@ prompt_pure_setup() {
 	if [[ $widgets[clear-screen] == 'builtin' ]]; then
 		zle -N clear-screen prompt_pure_clear_screen
 	fi
+
+	zle -N prompt_pure_buffer_cursor_position
+	zle -N zle-line-init prompt_pure_line_init
+	zle -N zle-line-finish prompt_pure_line_finish
 
 	# show username@host if logged in through SSH
 	[[ "$SSH_CONNECTION" != '' ]] && prompt_pure_username=' %F{242}%n@%m%f'
