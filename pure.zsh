@@ -330,10 +330,9 @@ prompt_pure_setup() {
 	autoload -Uz vcs_info
 	autoload -Uz async && async
 
-	typeset -g prompt_pure_ps_length
+	integer -g prompt_pure_ps_length
 	integer -g prompt_pure_zle_accumulated_bufferlines
-
-	typeset -g prompt_pure_zle_cursor_offset_lines
+	integer -g prompt_pure_zle_cursor_offset_lines
 	typeset -g prompt_pure_cursor_zle_data
 	typeset -g prompt_pure_accept_line_zle_data
 
