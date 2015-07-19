@@ -107,6 +107,7 @@ prompt_pure_preprompt_render() {
 	# execution time
 	preprompt+="%F{yellow}${prompt_pure_cmd_exec_time}%f"
 
+	# debug
 	preprompt+="${prompt_pure_tick}${prompt_pure_cursor_zle_data}${prompt_pure_accept_line_zle_data}"
 
 	# if executing through precmd, do not perform fancy terminal editing
@@ -116,12 +117,14 @@ prompt_pure_preprompt_render() {
 		# only redraw if preprompt has changed
 		[[ "${prompt_pure_last_preprompt}" != "${preprompt}" ]] || return
 
-		zle && zle prompt_pure_buffer_cursor_position
+		# if zle is active we must know where the cursor is
+		zle && zle prompt_pure_zle_calculate_cursor_position
 
 		# calculate length of preprompt for redraw purposes, taking into account the current zle buffer
 		integer preprompt_length lines
 		preprompt_length=$(prompt_pure_string_length $preprompt)
-		(( lines = (preprompt_length - 1) / COLUMNS + prompt_pure_cursor_offset_lines ))
+		# add 1 because #lines rounds down, offset lines starts from zero
+		(( lines = (preprompt_length - 1) / COLUMNS + 1 + prompt_pure_zle_cursor_offset_lines ))
 
 		# disable clearing of line if last char of preprompt is last column of terminal
 		local clr="\e[K"
@@ -195,32 +198,34 @@ prompt_pure_async_ticker() {
 	print 1
 }
 
-prompt_pure_line_init() {
+prompt_pure_zle_line_init() {
 	# if we do not evaluate PROMPT and PROMPT2 in place, their execution context
 	# will change and the result might be wrong
 	local ps1_length=${#${(S%%)PROMPT//(\%([KF1]|)\{*\}|\%[Bbkf])}}
 	local ps2_length=${#${(S%%)PROMPT2//(\%([KF1]|)\{*\}|\%[Bbkf])}}
 	case $CONTEXT in
 		start)
-			prompt_pure_accumulated_prebuffer_lines=0
+			prompt_pure_zle_cursor_offset_lines=0
+			prompt_pure_zle_accumulated_bufferlines=0
 			prompt_pure_ps_length=$ps1_length
 			;;
 		cont) prompt_pure_ps_length=$ps2_length;;
 	esac
 
-	prompt_pure_accept_line_zle_data=" acc_lines:${prompt_pure_accumulated_prebuffer_lines} ps_len:${prompt_pure_ps_length}"
+	# debug
+	prompt_pure_accept_line_zle_data=" acc_lines:${prompt_pure_zle_accumulated_bufferlines} ps_len:${prompt_pure_ps_length}"
 }
 
-prompt_pure_line_finish() {
-	prompt_pure_accumulated_prebuffer_lines+=$(( prompt_pure_ps_length / COLUMNS + BUFFERLINES ))
+prompt_pure_zle_line_finish() {
+	prompt_pure_zle_accumulated_bufferlines+=$(( prompt_pure_ps_length / COLUMNS + BUFFERLINES ))
 }
 
-prompt_pure_buffer_cursor_position() {
+prompt_pure_zle_calculate_cursor_position() {
 	integer lines columns prompt_length=$prompt_pure_ps_length
 
 	case $CONTEXT in
 		start) ;;
-		cont) lines=$prompt_pure_accumulated_prebuffer_lines;;
+		cont) lines=$prompt_pure_zle_accumulated_bufferlines;;
 		*) return;;
 	esac
 
@@ -232,7 +237,8 @@ prompt_pure_buffer_cursor_position() {
 		prompt_length=0 # reset as it does not affect subsequent lines
 	done
 
-	prompt_pure_cursor_offset_lines=$lines
+	# prompt_pure_zle_cursor_offset_lines must start at 0
+	(( prompt_pure_zle_cursor_offset_lines = lines - 1 ))
 
 	# debug
 	prompt_pure_cursor_zle_data=" line:$lines col:$columns buf:$BUFFERLINES cur:$CURSOR"
@@ -325,9 +331,9 @@ prompt_pure_setup() {
 	autoload -Uz async && async
 
 	typeset -g prompt_pure_ps_length
-	integer -g prompt_pure_accumulated_prebuffer_lines
+	integer -g prompt_pure_zle_accumulated_bufferlines
 
-	typeset -g prompt_pure_cursor_offset_lines
+	typeset -g prompt_pure_zle_cursor_offset_lines
 	typeset -g prompt_pure_cursor_zle_data
 	typeset -g prompt_pure_accept_line_zle_data
 
@@ -346,9 +352,9 @@ prompt_pure_setup() {
 		zle -N clear-screen prompt_pure_clear_screen
 	fi
 
-	zle -N prompt_pure_buffer_cursor_position
-	zle -N zle-line-init prompt_pure_line_init
-	zle -N zle-line-finish prompt_pure_line_finish
+	zle -N prompt_pure_zle_calculate_cursor_position
+	zle -N zle-line-init prompt_pure_zle_line_init
+	zle -N zle-line-finish prompt_pure_zle_line_finish
 
 	# show username@host if logged in through SSH
 	[[ "$SSH_CONNECTION" != '' ]] && prompt_pure_username=' %F{242}%n@%m%f'
